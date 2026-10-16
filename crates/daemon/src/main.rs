@@ -443,8 +443,8 @@ type BindInfo = (HotkeyId, String, Modifiers, u32);
 fn is_os_protected(m: Modifiers, vk: u32) -> bool {
     use leopardwm_platform_win32::vk as keys;
     const VK_DELETE: u32 = 0x2E;
-    let win_only = m.win && !m.ctrl && !m.alt && !m.shift;
-    let ctrl_alt = m.ctrl && m.alt && !m.win && !m.shift;
+    let win_only = m.win.on() && !m.ctrl.on() && !m.alt.on() && !m.shift.on();
+    let ctrl_alt = m.ctrl.on() && m.alt.on() && !m.win.on() && !m.shift.on();
     (win_only && vk == keys::L) || (ctrl_alt && vk == VK_DELETE)
 }
 

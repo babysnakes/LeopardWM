@@ -4,7 +4,7 @@ use crate::ipc_client::send_command;
 use anyhow::{Context, Result};
 use directories::BaseDirs;
 use leopardwm_ipc::{HotkeyBindingInfo, HotkeyIssue, IpcCommand, IpcResponse};
-use leopardwm_platform_win32::parse_hotkey_string;
+use leopardwm_platform_win32::{parse_hotkey_string, ModifierState};
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::fs::{self, OpenOptions};
@@ -21,10 +21,10 @@ const MANIFEST_FILE_NAME: &str = "LeopardWM.LeopardWM.en-US.yml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PowerToysChord {
-    win: bool,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
+    win: ModifierState,
+    ctrl: ModifierState,
+    alt: ModifierState,
+    shift: ModifierState,
     key: u32,
 }
 
@@ -178,10 +178,11 @@ fn render_yaml(sections: &[PowerToysSection]) -> String {
             writeln!(out, "        Shortcut:").expect("write to string");
             // PowerToys treats this array as a sequence, not alternatives.
             let chord = &shortcut.chord;
-            writeln!(out, "          - Win: {}", chord.win).expect("write to string");
-            writeln!(out, "            Ctrl: {}", chord.ctrl).expect("write to string");
-            writeln!(out, "            Alt: {}", chord.alt).expect("write to string");
-            writeln!(out, "            Shift: {}", chord.shift).expect("write to string");
+            // ERROR(haim) This is complete bogus - need to set it correctly
+            writeln!(out, "          - Win: {:?}", chord.win).expect("write to string");
+            writeln!(out, "            Ctrl: {:?}", chord.ctrl).expect("write to string");
+            writeln!(out, "            Alt: {:?}", chord.alt).expect("write to string");
+            writeln!(out, "            Shift: {:?}", chord.shift).expect("write to string");
             writeln!(out, "            Keys:").expect("write to string");
             writeln!(out, "              - {}", chord.key).expect("write to string");
         }

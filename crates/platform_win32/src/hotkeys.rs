@@ -59,13 +59,24 @@ static SUSPEND_RESUME_SENDER: std::sync::Mutex<Option<mpsc::Sender<SuspendResume
 /// Unique identifier for a registered hotkey.
 pub type HotkeyId = i32;
 
+/// Modifier Side
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Default)]
+#[repr(u8)]
+pub enum ModifierState {
+    #[default]
+    Off = 0,
+    Either = 1,
+    Left = 2,
+    Right = 3,
+}
+
 /// Keyboard modifiers for hotkeys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Modifiers {
-    pub ctrl: bool,
-    pub alt: bool,
-    pub shift: bool,
-    pub win: bool,
+    pub ctrl: ModifierState,
+    pub alt: ModifierState,
+    pub shift: ModifierState,
+    pub win: ModifierState,
     /// F13–F24 held as modifiers. Bit `i` (0..=11) is F13+`i` (vk 0x7C..=0x87).
     pub fn_mods: u16,
 }
@@ -77,11 +88,21 @@ pub fn fn_mod_bit(vk: u32) -> Option<u16> {
     (0x7C..=0x87).contains(&vk).then(|| 1u16 << (vk - 0x7C))
 }
 
+impl ModifierState {
+    /// Whether this modifier is enabled or not (regardless of the side)
+    pub fn on(&self) -> bool {
+        match self {
+            ModifierState::Off => false,
+            _ => true,
+        }
+    }
+}
+
 impl Modifiers {
     /// Create modifiers with only the Win key.
     pub fn win() -> Self {
         Self {
-            win: true,
+            win: ModifierState::Either,
             ..Default::default()
         }
     }
@@ -89,8 +110,8 @@ impl Modifiers {
     /// Create modifiers with Win + Shift.
     pub fn win_shift() -> Self {
         Self {
-            win: true,
-            shift: true,
+            win: ModifierState::Either,
+            shift: ModifierState::Either,
             ..Default::default()
         }
     }
@@ -98,20 +119,20 @@ impl Modifiers {
     /// Create modifiers with Alt.
     pub fn alt() -> Self {
         Self {
-            alt: true,
+            alt: ModifierState::Either,
             ..Default::default()
         }
     }
 
-    /// Pack the modifier flags into a bitfield. Bits 0–3 are Ctrl/Alt/Shift/Win
-    /// (0–15, unchanged); bits 4–15 carry the F13–F24 modifier mask. Used to
-    /// derive stable hotkey IDs that don't depend on config iteration order.
+    /// Pack the modifier flags into a bitfield. Bits 0–7 are Ctrl/Alt/Shift/Win
+    /// (including side if any); bits 8–15 carry the F13–F24 modifier mask. Used
+    /// to derive stable hotkey IDs that don't depend on config iteration order.
     pub fn bits(&self) -> i32 {
         (self.ctrl as i32)
-            | (self.alt as i32) << 1
-            | (self.shift as i32) << 2
-            | (self.win as i32) << 3
-            | (self.fn_mods as i32) << 4
+            | (self.alt as i32) << 2
+            | (self.shift as i32) << 4
+            | (self.win as i32) << 6
+            | (self.fn_mods as i32) << 8
     }
 }
 
@@ -761,11 +782,12 @@ pub fn parse_hotkey_string(s: &str) -> Option<(Modifiers, u32)> {
 
     // Last part is the key, rest are modifiers
     for part in &parts[..parts.len() - 1] {
+        // TODO(haim) This section needs update, I only made it compile...
         match part.to_uppercase().as_str() {
-            "CTRL" | "CONTROL" => modifiers.ctrl = true,
-            "ALT" => modifiers.alt = true,
-            "SHIFT" => modifiers.shift = true,
-            "WIN" | "SUPER" | "META" => modifiers.win = true,
+            "CTRL" | "CONTROL" => modifiers.ctrl = ModifierState::Either,
+            "ALT" => modifiers.alt = ModifierState::Either,
+            "SHIFT" => modifiers.shift = ModifierState::Either,
+            "WIN" | "SUPER" | "META" => modifiers.win = ModifierState::Either,
             // F13–F24 may act as modifiers; F1–F12 may not. Anything else is
             // an unknown modifier and rejects the whole hotkey string.
             other => modifiers.fn_mods |= parse_vk(other).and_then(fn_mod_bit)?,
@@ -816,17 +838,18 @@ pub fn format_hotkey(modifiers: Modifiers, vk: u32) -> Option<String> {
         _ => return None,
     };
 
+    // TODO(haim) Only made it compile, needs to update logic
     let mut parts = Vec::new();
-    if modifiers.ctrl {
+    if modifiers.ctrl.on() {
         parts.push("Ctrl".to_string());
     }
-    if modifiers.alt {
+    if modifiers.alt.on() {
         parts.push("Alt".to_string());
     }
-    if modifiers.win {
+    if modifiers.win.on() {
         parts.push("Win".to_string());
     }
-    if modifiers.shift {
+    if modifiers.shift.on() {
         parts.push("Shift".to_string());
     }
     for offset in 0..12 {
@@ -886,8 +909,8 @@ mod tests {
     #[test]
     fn test_stable_id_is_deterministic_and_unique_per_combo() {
         let ctrl_alt = Modifiers {
-            ctrl: true,
-            alt: true,
+            ctrl: ModifierState::Either,
+            alt: ModifierState::Either,
             ..Default::default()
         };
         // Same combo -> same id across calls (reload stability).
@@ -909,10 +932,10 @@ mod tests {
         // Standard-modifier ids stay within the legacy app hotkey range
         // (0x0000-0xBFFF).
         let all_mods = Modifiers {
-            ctrl: true,
-            alt: true,
-            shift: true,
-            win: true,
+            ctrl: ModifierState::Either,
+            alt: ModifierState::Either,
+            shift: ModifierState::Either,
+            win: ModifierState::Either,
             ..Default::default()
         };
         assert!(Hotkey::stable_id(all_mods, 0xFF) <= 0xBFFF);
@@ -1176,33 +1199,33 @@ mod tests {
     fn test_parse_hotkey_string() {
         // Win+H
         let (mods, vk) = parse_hotkey_string("Win+H").unwrap();
-        assert!(mods.win);
-        assert!(!mods.ctrl);
-        assert!(!mods.alt);
-        assert!(!mods.shift);
+        assert!(mods.win.on());
+        assert!(!mods.ctrl.on());
+        assert!(!mods.alt.on());
+        assert!(!mods.shift.on());
         assert_eq!(vk, super::vk::H);
 
         // Ctrl+Alt+Left
         let (mods, vk) = parse_hotkey_string("Ctrl+Alt+Left").unwrap();
-        assert!(mods.ctrl);
-        assert!(mods.alt);
-        assert!(!mods.win);
+        assert!(mods.ctrl.on());
+        assert!(mods.alt.on());
+        assert!(!mods.win.on());
         assert_eq!(vk, super::vk::LEFT);
 
         // Win+Shift+L
         let (mods, vk) = parse_hotkey_string("Win+Shift+L").unwrap();
-        assert!(mods.win);
-        assert!(mods.shift);
+        assert!(mods.win.on());
+        assert!(mods.shift.on());
         assert_eq!(vk, super::vk::L);
 
         // Case insensitive
         let (mods, _) = parse_hotkey_string("win+shift+h").unwrap();
-        assert!(mods.win);
-        assert!(mods.shift);
+        assert!(mods.win.on());
+        assert!(mods.shift.on());
 
         // PageUp/PageDown and Numpad as the final key token
         let (mods, vk) = parse_hotkey_string("Ctrl+Alt+PageDown").unwrap();
-        assert!(mods.ctrl && mods.alt);
+        assert!(mods.ctrl.on() && mods.alt.on());
         assert_eq!(vk, super::vk::PAGE_DOWN);
         let (_, vk) = parse_hotkey_string("Ctrl+NumpadAdd").unwrap();
         assert_eq!(vk, super::vk::NUMPAD_ADD);
@@ -1218,7 +1241,7 @@ mod tests {
         // F13–F24 as modifiers.
         let (mods, vk) = parse_hotkey_string("F13+H").unwrap();
         assert_eq!(mods.fn_mods, fn_mod_bit(0x7C).unwrap());
-        assert!(!mods.ctrl && !mods.alt && !mods.shift && !mods.win);
+        assert!(!mods.ctrl.on() && !mods.alt.on() && !mods.shift.on() && !mods.win.on());
         assert_eq!(vk, super::vk::H);
 
         // Multiple F-key modifiers combine.
@@ -1231,7 +1254,7 @@ mod tests {
 
         // F-key modifier mixes with standard modifiers.
         let (mods, _) = parse_hotkey_string("Ctrl+F13+H").unwrap();
-        assert!(mods.ctrl);
+        assert!(mods.ctrl.on());
         assert_eq!(mods.fn_mods, fn_mod_bit(0x7C).unwrap());
 
         // F1–F12 are not valid modifiers.
@@ -1276,13 +1299,13 @@ mod tests {
         let modifiers = [
             Modifiers::default(),
             Modifiers {
-                ctrl: true,
-                alt: true,
+                ctrl: ModifierState::Either,
+                alt: ModifierState::Either,
                 ..Default::default()
             },
             Modifiers {
-                win: true,
-                shift: true,
+                win: ModifierState::Either,
+                shift: ModifierState::Either,
                 fn_mods: fn_mod_bit(0x7C).unwrap() | fn_mod_bit(0x7F).unwrap(),
                 ..Default::default()
             },

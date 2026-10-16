@@ -1,5 +1,6 @@
 use super::*;
 use leopardwm_core_layout::{Rect, Workspace};
+use leopardwm_platform_win32::ModifierState;
 use std::sync::atomic::Ordering;
 
 static REAL_WINDOW_STYLE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -11808,12 +11809,12 @@ fn test_fullscreen_minimize_clears_fullscreen_in_daemon() {
 #[test]
 fn test_protected_binds_flags_os_reserved_combos() {
     let win = Modifiers {
-        win: true,
+        win: ModifierState::Either,
         ..Default::default()
     };
     let ctrl_alt = Modifiers {
-        ctrl: true,
-        alt: true,
+        ctrl: ModifierState::Either,
+        alt: ModifierState::Either,
         ..Default::default()
     };
     let labels = vec![

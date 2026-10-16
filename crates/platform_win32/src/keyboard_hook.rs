@@ -6,8 +6,8 @@
 //! Right Alt on international layouts) does not fire Ctrl+Alt binds.
 
 use crate::{
-    fn_mod_bit, recover_poisoned_mutex, HotkeyEvent, HotkeyId, Modifiers, Win32Error,
-    WM_QUIT_LLHOOK_THREAD,
+    fn_mod_bit, recover_poisoned_mutex, HotkeyEvent, HotkeyId, ModifierState, Modifiers,
+    Win32Error, WM_QUIT_LLHOOK_THREAD,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -151,9 +151,9 @@ fn is_recording_control(vk: u32, modifiers: Modifiers) -> bool {
 }
 
 fn menu_mask(modifiers: Modifiers) -> Option<u16> {
-    if modifiers.win && !modifiers.ctrl && !modifiers.alt && !modifiers.shift {
+    if modifiers.win.on() && !modifiers.ctrl.on() && !modifiers.alt.on() && !modifiers.shift.on() {
         Some(VK_CONTROL as u16)
-    } else if modifiers.alt && !modifiers.ctrl {
+    } else if modifiers.alt.on() && !modifiers.ctrl.on() {
         Some(VK_MENU_MASK)
     } else {
         None
@@ -655,10 +655,27 @@ unsafe fn keyboard_ll_hook_inner(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> 
         .lock()
         .unwrap_or_else(recover_poisoned_mutex);
     let held = Modifiers {
-        ctrl: GetAsyncKeyState(VK_LCONTROL) < 0 || GetAsyncKeyState(VK_RCONTROL) < 0,
-        alt: GetAsyncKeyState(VK_LMENU) < 0,
-        shift: GetAsyncKeyState(VK_LSHIFT) < 0 || GetAsyncKeyState(VK_RSHIFT) < 0,
-        win: GetAsyncKeyState(VK_LWIN) < 0 || GetAsyncKeyState(VK_RWIN) < 0,
+        // TODO(haim) this requires implementation of all the options and much nicer api
+        ctrl: if GetAsyncKeyState(VK_LCONTROL) < 0 || GetAsyncKeyState(VK_RCONTROL) < 0 {
+            ModifierState::Either
+        } else {
+            ModifierState::Off
+        },
+        alt: if GetAsyncKeyState(VK_LMENU) < 0 {
+            ModifierState::Either
+        } else {
+            ModifierState::Off
+        },
+        shift: if GetAsyncKeyState(VK_LSHIFT) < 0 || GetAsyncKeyState(VK_RSHIFT) < 0 {
+            ModifierState::Either
+        } else {
+            ModifierState::Off
+        },
+        win: if GetAsyncKeyState(VK_LWIN) < 0 || GetAsyncKeyState(VK_RWIN) < 0 {
+            ModifierState::Either
+        } else {
+            ModifierState::Off
+        },
         fn_mods: fn_held | recording_fn_held,
     };
     let binds = HOOK_BINDS.lock().unwrap_or_else(recover_poisoned_mutex);
@@ -864,8 +881,8 @@ mod tests {
 
     fn win_ctrl() -> Modifiers {
         Modifiers {
-            ctrl: true,
-            win: true,
+            ctrl: ModifierState::Either,
+            win: ModifierState::Either,
             ..Default::default()
         }
     }
@@ -1143,9 +1160,9 @@ mod tests {
     fn superset_modifiers_do_not_match() {
         let binds = vec![bind(win_ctrl(), 0x25)];
         let held = Modifiers {
-            ctrl: true,
-            win: true,
-            shift: true, // extra modifier held
+            ctrl: ModifierState::Either,
+            win: ModifierState::Either,
+            shift: ModifierState::Either, // extra modifier held
             ..Default::default()
         };
         assert!(find_bind(&binds, held, 0x25).is_none());
@@ -1158,7 +1175,7 @@ mod tests {
         assert!(find_bind(
             &binds,
             Modifiers {
-                ctrl: true,
+                ctrl: ModifierState::Either,
                 ..Default::default()
             },
             0x25
@@ -1195,7 +1212,7 @@ mod tests {
         assert!(find_bind(
             &binds,
             Modifiers {
-                ctrl: true,
+                ctrl: ModifierState::Either,
                 ..Default::default()
             },
             0x48
@@ -1283,7 +1300,7 @@ mod tests {
             );
         }
         let shift = Modifiers {
-            shift: true,
+            shift: ModifierState::Either,
             ..Default::default()
         };
         assert!(matches!(
@@ -1303,7 +1320,7 @@ mod tests {
             Action::SwallowRecorded { .. }
         ));
         let ctrl = Modifiers {
-            ctrl: true,
+            ctrl: ModifierState::Either,
             ..Default::default()
         };
         assert!(matches!(

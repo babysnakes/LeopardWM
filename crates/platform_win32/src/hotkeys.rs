@@ -87,13 +87,24 @@ pub struct Modifiers {
 pub fn fn_mod_bit(vk: u32) -> Option<u16> {
     (0x7C..=0x87).contains(&vk).then(|| 1u16 << (vk - 0x7C))
 }
-
 impl ModifierState {
+    // TODO(haim) find a better name or check some auto representation (e.g. as bool?)
     /// Whether this modifier is enabled or not (regardless of the side)
     pub fn on(&self) -> bool {
         match self {
             ModifierState::Off => false,
             _ => true,
+        }
+    }
+
+    /// Format the modifier based on the `either` string - prepend 'L' or 'R' to
+    /// the `either` variant (so "LCtrl", "RAlt", etc).
+    pub fn format(&self, either: &str) -> String {
+        match self {
+            ModifierState::Off => "".to_string(),
+            ModifierState::Either => either.to_string(),
+            ModifierState::Left => format!("L{either}"),
+            ModifierState::Right => format!("R{either}"),
         }
     }
 }
@@ -782,12 +793,19 @@ pub fn parse_hotkey_string(s: &str) -> Option<(Modifiers, u32)> {
 
     // Last part is the key, rest are modifiers
     for part in &parts[..parts.len() - 1] {
-        // TODO(haim) This section needs update, I only made it compile...
         match part.to_uppercase().as_str() {
             "CTRL" | "CONTROL" => modifiers.ctrl = ModifierState::Either,
+            "LCTRL" | "LCONTROL" => modifiers.ctrl = ModifierState::Left,
+            "RCTRL" | "RCONTROL" => modifiers.ctrl = ModifierState::Right,
             "ALT" => modifiers.alt = ModifierState::Either,
+            "LALT" => modifiers.alt = ModifierState::Left,
+            "RALT" => modifiers.alt = ModifierState::Right,
             "SHIFT" => modifiers.shift = ModifierState::Either,
+            "LSHIFT" => modifiers.shift = ModifierState::Left,
+            "RSHIFT" => modifiers.shift = ModifierState::Right,
             "WIN" | "SUPER" | "META" => modifiers.win = ModifierState::Either,
+            "LWIN" | "LSUPER" | "LMETA" => modifiers.win = ModifierState::Left,
+            "RWIN" | "RSUPER" | "RMETA" => modifiers.win = ModifierState::Right,
             // F13–F24 may act as modifiers; F1–F12 may not. Anything else is
             // an unknown modifier and rejects the whole hotkey string.
             other => modifiers.fn_mods |= parse_vk(other).and_then(fn_mod_bit)?,
@@ -838,19 +856,18 @@ pub fn format_hotkey(modifiers: Modifiers, vk: u32) -> Option<String> {
         _ => return None,
     };
 
-    // TODO(haim) Only made it compile, needs to update logic
     let mut parts = Vec::new();
     if modifiers.ctrl.on() {
-        parts.push("Ctrl".to_string());
+        parts.push(modifiers.ctrl.format("Ctrl"));
     }
     if modifiers.alt.on() {
-        parts.push("Alt".to_string());
+        parts.push(modifiers.alt.format("Alt"));
     }
     if modifiers.win.on() {
-        parts.push("Win".to_string());
+        parts.push(modifiers.win.format("Win"));
     }
     if modifiers.shift.on() {
-        parts.push("Shift".to_string());
+        parts.push(modifiers.shift.format("Shift"));
     }
     for offset in 0..12 {
         if modifiers.fn_mods & (1 << offset) != 0 {
@@ -1197,35 +1214,59 @@ mod tests {
 
     #[test]
     fn test_parse_hotkey_string() {
+        use ModifierState::*;
         // Win+H
         let (mods, vk) = parse_hotkey_string("Win+H").unwrap();
-        assert!(mods.win.on());
-        assert!(!mods.ctrl.on());
-        assert!(!mods.alt.on());
-        assert!(!mods.shift.on());
+        assert!(mods.win == Either);
+        assert!(mods.ctrl == Off);
+        assert!(mods.alt == Off);
+        assert!(mods.shift == Off);
         assert_eq!(vk, super::vk::H);
 
         // Ctrl+Alt+Left
         let (mods, vk) = parse_hotkey_string("Ctrl+Alt+Left").unwrap();
-        assert!(mods.ctrl.on());
-        assert!(mods.alt.on());
-        assert!(!mods.win.on());
+        assert!(mods.ctrl == Either);
+        assert!(mods.alt == Either);
+        assert!(mods.win == Off);
         assert_eq!(vk, super::vk::LEFT);
 
         // Win+Shift+L
         let (mods, vk) = parse_hotkey_string("Win+Shift+L").unwrap();
-        assert!(mods.win.on());
-        assert!(mods.shift.on());
+        assert!(mods.win == Either);
+        assert!(mods.shift == Either);
         assert_eq!(vk, super::vk::L);
+
+        //Left/Right modifiers
+        // LCtrl+Alt+H
+        let (mods, _) = parse_hotkey_string("LCtrl+Alt+H").unwrap();
+        assert!(mods.ctrl == Left);
+        assert!(mods.alt == Either);
+
+        // RAlt+9
+        let (mods, _) = parse_hotkey_string("RAlt+LShift+9").unwrap();
+        assert!(mods.ctrl == Off);
+        assert!(mods.shift == Left);
+        assert!(mods.alt == Right);
+
+        // RCtrl+LAlt+LWin+M
+        let (mods, _) = parse_hotkey_string("RCtrl+LAlt+LWin+M").unwrap();
+        assert!(mods.ctrl == Right);
+        assert!(mods.alt == Left);
+        assert!(mods.win == Left);
+
+        // RWin+RShift+A
+        let (mods, _) = parse_hotkey_string("RWin+RShift+A").unwrap();
+        assert!(mods.win == Right);
+        assert!(mods.shift == Right);
 
         // Case insensitive
         let (mods, _) = parse_hotkey_string("win+shift+h").unwrap();
-        assert!(mods.win.on());
-        assert!(mods.shift.on());
+        assert!(mods.win == Either);
+        assert!(mods.shift == Either);
 
         // PageUp/PageDown and Numpad as the final key token
         let (mods, vk) = parse_hotkey_string("Ctrl+Alt+PageDown").unwrap();
-        assert!(mods.ctrl.on() && mods.alt.on());
+        assert!(mods.ctrl == Either && mods.alt == Either);
         assert_eq!(vk, super::vk::PAGE_DOWN);
         let (_, vk) = parse_hotkey_string("Ctrl+NumpadAdd").unwrap();
         assert_eq!(vk, super::vk::NUMPAD_ADD);
@@ -1241,7 +1282,7 @@ mod tests {
         // F13–F24 as modifiers.
         let (mods, vk) = parse_hotkey_string("F13+H").unwrap();
         assert_eq!(mods.fn_mods, fn_mod_bit(0x7C).unwrap());
-        assert!(!mods.ctrl.on() && !mods.alt.on() && !mods.shift.on() && !mods.win.on());
+        assert!(mods.ctrl == Off && mods.alt == Off && mods.shift == Off && mods.win == Off);
         assert_eq!(vk, super::vk::H);
 
         // Multiple F-key modifiers combine.
@@ -1254,7 +1295,7 @@ mod tests {
 
         // F-key modifier mixes with standard modifiers.
         let (mods, _) = parse_hotkey_string("Ctrl+F13+H").unwrap();
-        assert!(mods.ctrl.on());
+        assert!(mods.ctrl == Either);
         assert_eq!(mods.fn_mods, fn_mod_bit(0x7C).unwrap());
 
         // F1–F12 are not valid modifiers.
@@ -1301,6 +1342,26 @@ mod tests {
             Modifiers {
                 ctrl: ModifierState::Either,
                 alt: ModifierState::Either,
+                ..Default::default()
+            },
+            Modifiers {
+                ctrl: ModifierState::Right,
+                shift: ModifierState::Right,
+                ..Default::default()
+            },
+            Modifiers {
+                ctrl: ModifierState::Left,
+                shift: ModifierState::Left,
+                ..Default::default()
+            },
+            Modifiers {
+                alt: ModifierState::Right,
+                win: ModifierState::Right,
+                ..Default::default()
+            },
+            Modifiers {
+                alt: ModifierState::Left,
+                win: ModifierState::Left,
                 ..Default::default()
             },
             Modifiers {

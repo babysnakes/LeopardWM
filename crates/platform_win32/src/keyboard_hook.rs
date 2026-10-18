@@ -29,6 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
+#[derive(Default)]
 struct HookModifiers {
     ctrl: Option<ModifierSide>,
     alt: Option<ModifierSide>,
@@ -36,6 +37,35 @@ struct HookModifiers {
     win: Option<ModifierSide>,
     /// F13–F24 held as modifiers. Bit `i` (0..=11) is F13+`i` (vk 0x7C..=0x87).
     fn_mods: u16,
+}
+
+impl HookModifiers {
+    fn matches(&self, modifiers: &Modifiers) -> bool {
+        fn compatible(state: ModifierState, side: &Option<ModifierSide>) -> bool {
+            match (state, side) {
+                (ModifierState::Off, None) => true,
+                (ModifierState::Either, Some(_)) => true,
+                (ModifierState::Left, Some(ModifierSide::Left)) => true,
+                (ModifierState::Right, Some(ModifierSide::Right)) => true,
+                _ => false,
+            }
+        }
+
+        // alt is a special case
+        let alt_compatible = match (modifiers.alt, &self.alt) {
+            (ModifierState::Either, Some(ModifierSide::Left)) => true,
+            (ModifierState::Left, Some(ModifierSide::Left)) => true,
+            (ModifierState::Right, Some(ModifierSide::Right)) => true,
+            (ModifierState::Off, None) => true,
+            _ => false,
+        };
+
+        compatible(modifiers.ctrl, &self.ctrl)
+            && alt_compatible
+            && compatible(modifiers.shift, &self.shift)
+            && compatible(modifiers.win, &self.win)
+            && modifiers.fn_mods == self.fn_mods
+    }
 }
 
 /// A hotkey bind the hook matches: its modifiers, virtual-key code, and the
@@ -125,13 +155,14 @@ fn is_modifier_vk(vk: i32) -> bool {
     )
 }
 
+// TODO(haim) Update docs once finalized (what is `RegisterHotKey` semantics?)
 /// Find the bind matching exactly the held modifiers and key. Exact
 /// match means a superset (extra modifier held) does not fire it, matching
 /// `RegisterHotKey` semantics.
-fn find_bind(binds: &[HotkeyBind], held: Modifiers, vk: u32) -> Option<HotkeyBind> {
+fn find_bind(binds: &[HotkeyBind], held: HookModifiers, vk: u32) -> Option<HotkeyBind> {
     binds
         .iter()
-        .find(|b| b.vk == vk && b.modifiers == held)
+        .find(|b| b.vk == vk && held.matches(&b.modifiers))
         .copied()
 }
 
@@ -169,9 +200,8 @@ enum Action {
 
 // While recording, bare Esc/Tab/Backspace/Delete pass through; representable chords
 // are captured, and unrepresentable chords are swallowed while capture remains armed.
-fn is_recording_control(vk: u32, modifiers: Modifiers) -> bool {
-    // TODO(haim) this fn seems to be same to migrate to other modifiers
-    modifiers == Modifiers::default() && matches!(vk, VK_ESCAPE | VK_TAB | VK_BACK | VK_DELETE)
+fn is_recording_control(vk: u32, modifiers: HookModifiers) -> bool {
+    modifiers == HookModifiers::default() && matches!(vk, VK_ESCAPE | VK_TAB | VK_BACK | VK_DELETE)
 }
 
 fn win_only(modifiers: Modifiers) -> bool {
@@ -182,7 +212,7 @@ fn win_only(modifiers: Modifiers) -> bool {
 fn decide(
     msg: KeyMsg,
     vk: u32,
-    held: Modifiers,
+    held: HookModifiers,
     recording: bool,
     binds: &[HotkeyBind],
     fn_mask: u16,
@@ -584,7 +614,7 @@ unsafe fn keyboard_ll_hook_inner(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> 
         let action = decide(
             msg,
             vk,
-            Modifiers::default(),
+            HookModifiers::default(),
             recording,
             &[],
             0,
@@ -663,27 +693,35 @@ unsafe fn keyboard_ll_hook_inner(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> 
     let recording_fn_held = *HOOK_RECORDING_FN_HELD
         .lock()
         .unwrap_or_else(recover_poisoned_mutex);
-    let held = Modifiers {
-        // TODO(haim) this requires implementation of all the options and much nicer api
-        ctrl: if GetAsyncKeyState(VK_LCONTROL) < 0 || GetAsyncKeyState(VK_RCONTROL) < 0 {
-            ModifierState::Either
+    let held = HookModifiers {
+        ctrl: if GetAsyncKeyState(VK_LCONTROL) < 0 {
+            Some(ModifierSide::Left)
+        } else if GetAsyncKeyState(VK_RCONTROL) < 0 {
+            Some(ModifierSide::Right)
         } else {
-            ModifierState::Off
+            None
         },
+        // TODO(haim) Originally we ignore right-alt here. Need to fix it somewhere else
         alt: if GetAsyncKeyState(VK_LMENU) < 0 {
-            ModifierState::Either
+            Some(ModifierSide::Left)
+        } else if GetAsyncKeyState(VK_RMENU) < 0 {
+            Some(ModifierSide::Right)
         } else {
-            ModifierState::Off
+            None
         },
-        shift: if GetAsyncKeyState(VK_LSHIFT) < 0 || GetAsyncKeyState(VK_RSHIFT) < 0 {
-            ModifierState::Either
+        shift: if GetAsyncKeyState(VK_LSHIFT) < 0 {
+            Some(ModifierSide::Left)
+        } else if GetAsyncKeyState(VK_RSHIFT) < 0 {
+            Some(ModifierSide::Right)
         } else {
-            ModifierState::Off
+            None
         },
-        win: if GetAsyncKeyState(VK_LWIN) < 0 || GetAsyncKeyState(VK_RWIN) < 0 {
-            ModifierState::Either
+        win: if GetAsyncKeyState(VK_LWIN) < 0 {
+            Some(ModifierSide::Left)
+        } else if GetAsyncKeyState(VK_RWIN) < 0 {
+            Some(ModifierSide::Right)
         } else {
-            ModifierState::Off
+            None
         },
         fn_mods: fn_held | recording_fn_held,
     };

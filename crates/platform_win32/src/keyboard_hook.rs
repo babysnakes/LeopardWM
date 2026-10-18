@@ -25,6 +25,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
+struct HookModifiers {
+    ctrl: Option<ModifierSide>,
+    alt: Option<ModifierSide>,
+    shift: Option<ModifierSide>,
+    win: Option<ModifierSide>,
+    /// F13–F24 held as modifiers. Bit `i` (0..=11) is F13+`i` (vk 0x7C..=0x87).
+    fn_mods: u16,
+}
+
 /// A hotkey bind the hook matches: its modifiers, virtual-key code, and the
 /// hotkey id to emit when it fires.
 #[derive(Debug, Clone, Copy)]
@@ -33,6 +42,11 @@ pub struct HotkeyBind {
     pub vk: u32,
     pub id: HotkeyId,
     pub overview_action: Option<crate::overview::OverviewAction>,
+}
+
+enum ModifierSide {
+    Left,
+    Right,
 }
 
 /// Event produced by the global keyboard hook.
@@ -147,6 +161,7 @@ enum Action {
 
 // Bare Esc/Tab/Backspace/Delete must remain usable as Settings recording controls.
 fn is_recording_control(vk: u32, modifiers: Modifiers) -> bool {
+    // TODO(haim) this fn seems to be same to migrate to other modifiers
     modifiers == Modifiers::default() && matches!(vk, VK_ESCAPE | VK_TAB | VK_BACK | VK_DELETE)
 }
 
@@ -210,6 +225,7 @@ fn decide(
         if is_recording_control(vk, held) {
             return Action::RecordingControl;
         }
+        // TODO(haim) we need to think what to do here.
         return if is_new_press && crate::format_hotkey(held, vk).is_some() {
             Action::SwallowRecorded {
                 modifiers: held,
@@ -229,6 +245,7 @@ fn decide(
         return Action::Pass;
     }
 
+    // TODO(haim) find_bind should be safe to migrate to new modifiers
     if let Some(bind) = find_bind(binds, held, vk) {
         return Action::SwallowHotkey {
             event: HotkeyEvent { id: bind.id },
@@ -561,6 +578,7 @@ unsafe fn keyboard_ll_hook_inner(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> 
     }
 
     if msg == KeyMsg::Up {
+        // TODO(haim) this entire section is some sort of cleanup?
         let fn_held = *HOOK_FN_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
         let recording_fn_held = *HOOK_RECORDING_FN_HELD
             .lock()
